@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	glog "log"
+
 	"github.com/ovrclk/hack/kvs"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -48,7 +50,8 @@ var nodecmd = &cobra.Command{
 func main() {
 	cmd.AddCommand(nodecmd)
 	if err := cmd.Execute(); err != nil {
-		panic(err)
+		glog.Fatalf("error: %v", err)
+		//panic(err)
 		//log.Error(err)
 	}
 }
@@ -57,6 +60,7 @@ func main() {
 // sets up the Tendermint root and ensures that the root exists
 func ParseConfig() (*cfg.Config, error) {
 	conf := cfg.DefaultConfig()
+	conf.SetRoot(cfg.DefaultTendermintDir)
 	err := viper.Unmarshal(conf)
 	if err != nil {
 		return nil, err
