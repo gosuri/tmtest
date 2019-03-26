@@ -6,6 +6,7 @@ import (
 
 	glog "log"
 
+	"github.com/gosuri/uitable"
 	"github.com/ovrclk/hack/kvs"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -15,16 +16,20 @@ import (
 	"github.com/tendermint/tendermint/node"
 	"github.com/tendermint/tendermint/p2p"
 	"github.com/tendermint/tendermint/privval"
+	tmclient "github.com/tendermint/tendermint/rpc/client"
 	"github.com/tendermint/tendermint/types"
 	tmtime "github.com/tendermint/tendermint/types/time"
 )
 
+const maxTokens uint64 = 1000000000000000
+
 var (
-	config = cfg.DefaultConfig()
-	logger = log.NewTMLogger(log.NewSyncWriter(os.Stdout))
+	baseDir = ".tendermint"
+	config  = cfg.DefaultConfig()
+	logger  = log.NewTMLogger(log.NewSyncWriter(os.Stdout))
 
 	cmd = &cobra.Command{
-		Use: "hack",
+		Use: "tmtest",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) (err error) {
 			config, err = ParseConfig()
 			if err != nil {
@@ -64,13 +69,36 @@ var (
 			return initFilesWithConfig(config)
 		},
 	}
+
+	getCmd = &cobra.Command{
+		Use:   "get",
+		Short: "Get a key value",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return doGet(args[0])
+		},
+	}
+	setCmd = &cobra.Command{
+		Use:   "set",
+		Short: "set a key value",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return doSet(args[0], args[1])
+		},
+	}
 )
 
-func main() {
+func init() {
+	cmd.PersistentFlags().StringVarP(&baseDir, "basedir", "b", baseDir, "base dir")
 	cmd.AddCommand(nodecmd)
 	cmd.AddCommand(initFilesCmd)
+	cmd.AddCommand(getCmd)
+	cmd.AddCommand(setCmd)
+}
+
+func main() {
 	if err := cmd.Execute(); err != nil {
-		glog.Fatalf("error: %v", err)
+		glog.Fatalf("error: %+v", err)
 	}
 }
 
@@ -116,7 +144,6 @@ func initFilesWithConfig(config *cfg.Config) error {
 			PubKey:  key,
 			Power:   10,
 		}}
-
 		if err := genDoc.SaveAs(genFile); err != nil {
 			return err
 		}
@@ -129,7 +156,7 @@ func initFilesWithConfig(config *cfg.Config) error {
 // sets up the Tendermint root and ensures that the root exists
 func ParseConfig() (*cfg.Config, error) {
 	conf := cfg.DefaultConfig()
-	conf.SetRoot(cfg.DefaultTendermintDir)
+	conf.SetRoot(baseDir)
 	err := viper.Unmarshal(conf)
 	if err != nil {
 		return nil, err
@@ -139,6 +166,9 @@ func ParseConfig() (*cfg.Config, error) {
 	if err = conf.ValidateBasic(); err != nil {
 		return nil, fmt.Errorf("Error in config file: %v", err)
 	}
+
+	//fmt.Printf("<!--\n" + html.EscapeString(spew.Sdump(conf)) + "\n-->")
+
 	return conf, err
 }
 
@@ -175,3 +205,52 @@ func NewNode(config *cfg.Config, logger log.Logger) (*node.Node, error) {
 		logger,
 	)
 }
+
+func doGet(key string) error {
+	res, err := httpClient().ABCIQuery("/", []byte(key))
+	if err != nil {
+		return err
+	}
+	//fmt.Printf("<!--\n" + html.EscapeString(spew.Sdump(res)) + "\n-->")
+	table := uitable.New()
+	table.MaxColWidth = 50
+	table.AddRow("Key:", string(res.Response.GetKey()))
+	table.AddRow("Value:", string(res.Response.GetValue()))
+	table.AddRow("Proof:", res.Response.GetProof().String())
+	table.AddRow("Height:", string(res.Response.GetHeight()))
+	fmt.Println(table)
+	return nil
+}
+
+func doSet(key, val string) error {
+	dat := []byte(fmt.Sprintf("%s=%s", key, val))
+	res, err := httpClient().BroadcastTxCommit(dat)
+	if err != nil {
+		return err
+	}
+	table := uitable.New()
+	table.MaxColWidth = 50
+	table.Wrap = true
+	table.AddRow("CheckTx:", string(res.CheckTx.String()))
+	table.AddRow("DeliverTx:", string(res.DeliverTx.String()))
+	fmt.Println(table)
+	return nil
+
+}
+
+func httpClient() *tmclient.HTTP {
+	return tmclient.NewHTTP("http://localhost:26657", "/websocket")
+
+}
+
+// func generateAkashGenesis(cmd *cobra.Command, args []string) (*types.Genesis, error) {
+// 	key, err := keys.ParseAccountPath(args[0])
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	return &ptypes.Genesis{
+// 		Accounts: []ptypes.Account{
+// 			{Address: key.ID(), Balance: maxTokens},
+// 		},
+// 	}, nil
+// }
