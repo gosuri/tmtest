@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"html"
 	"os"
 
 	glog "log"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/gosuri/uitable"
 	"github.com/ovrclk/hack/kvs"
 	"github.com/spf13/cobra"
@@ -17,6 +20,7 @@ import (
 	"github.com/tendermint/tendermint/p2p"
 	"github.com/tendermint/tendermint/privval"
 	tmclient "github.com/tendermint/tendermint/rpc/client"
+	libclient "github.com/tendermint/tendermint/rpc/lib/client"
 	"github.com/tendermint/tendermint/types"
 	tmtime "github.com/tendermint/tendermint/types/time"
 )
@@ -86,6 +90,13 @@ var (
 			return doSet(args[0], args[1])
 		},
 	}
+	watchCmd = &cobra.Command{
+		Use:   "watch",
+		Short: "watch",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return doWatch()
+		},
+	}
 )
 
 func init() {
@@ -94,6 +105,7 @@ func init() {
 	cmd.AddCommand(initFilesCmd)
 	cmd.AddCommand(getCmd)
 	cmd.AddCommand(setCmd)
+	cmd.AddCommand(watchCmd)
 }
 
 func main() {
@@ -167,7 +179,7 @@ func ParseConfig() (*cfg.Config, error) {
 		return nil, fmt.Errorf("Error in config file: %v", err)
 	}
 
-	//fmt.Printf("<!--\n" + html.EscapeString(spew.Sdump(conf)) + "\n-->")
+	fmt.Printf("<!--\n" + html.EscapeString(spew.Sdump(conf)) + "\n-->")
 
 	return conf, err
 }
@@ -189,12 +201,6 @@ func NewNode(config *cfg.Config, logger log.Logger) (*node.Node, error) {
 		return nil, err
 	}
 
-	// Get Blockstore
-	// blockStoreDB, err := node.DefaultDBProvider(&node.DBContext{ID: "blockstore", Config: config})
-	// if err != nil {
-	// 	return nil, err
-	// }
-
 	return node.NewNode(config,
 		privval.LoadOrGenFilePV(newPrivValKey, newPrivValState),
 		nodeKey,
@@ -211,7 +217,6 @@ func doGet(key string) error {
 	if err != nil {
 		return err
 	}
-	//fmt.Printf("<!--\n" + html.EscapeString(spew.Sdump(res)) + "\n-->")
 	table := uitable.New()
 	table.MaxColWidth = 50
 	table.AddRow("Key:", string(res.Response.GetKey()))
@@ -235,22 +240,36 @@ func doSet(key, val string) error {
 	table.AddRow("DeliverTx:", string(res.DeliverTx.String()))
 	fmt.Println(table)
 	return nil
+}
 
+func doWatch() error {
+	wsc := libclient.NewWSClient("localhost:26657", "/websocket")
+	if err := wsc.Start(); err != nil {
+		return err
+	}
+	defer wsc.Stop()
+	fmt.Println("---> STARTED ****")
+	if err := wsc.Subscribe(context.Background(), "tm.event='NewBlock'"); err != nil {
+		return err
+	}
+	fmt.Println("---> SUBSCRIBED ****")
+
+	table := uitable.New()
+	table.MaxColWidth = 50
+	table.Wrap = true
+	for {
+		select {
+		case y := <-wsc.ResponsesCh:
+			table.AddRow("Event:", string(y.Result))
+			fmt.Println(table)
+		case <-wsc.Quit():
+			fmt.Println("QUIT")
+			return nil
+		}
+	}
+	return nil
 }
 
 func httpClient() *tmclient.HTTP {
 	return tmclient.NewHTTP("http://localhost:26657", "/websocket")
-
 }
-
-// func generateAkashGenesis(cmd *cobra.Command, args []string) (*types.Genesis, error) {
-// 	key, err := keys.ParseAccountPath(args[0])
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	return &ptypes.Genesis{
-// 		Accounts: []ptypes.Account{
-// 			{Address: key.ID(), Balance: maxTokens},
-// 		},
-// 	}, nil
-// }
